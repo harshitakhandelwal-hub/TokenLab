@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TokenLab: build and explore an LLM tokenizer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Unbounded:wght@500;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+<header class="hero" id="hero">
+  <canvas class="galaxy" id="galaxy" aria-hidden="true"></canvas>
+  <div class="hero-inner">
+    <div class="brand">
+      <h1 class="title" aria-label="TokenLab">
+        <span class="tchip t1" aria-hidden="true">Token</span><span class="tchip t2" aria-hidden="true"><i>##</i>Lab</span>
+      </h1>
+      <p class="lede">Smash any sentence into tokens. Train your own tokenizer, build its vocabulary, and watch text turn into the numbers a language model actually reads.</p>
+    </div>
+
+    <div class="collider" aria-label="Your test sentence, live through the tokenizer">
+      <div class="cpane cpane-in">
+        <div class="cpane-head"><span>Your text</span><span class="cpane-meta" id="hero-chars"></span></div>
+        <textarea id="hero-test" spellcheck="false" rows="3" aria-label="Test sentence"></textarea>
+        <div class="hero-presets" id="hero-presets" aria-label="Try a sentence"></div>
+      </div>
+      <div class="cpane cpane-tok">
+        <div class="cpane-head"><span>Tokens</span><b class="big-count" id="hero-count"></b></div>
+        <div class="hl" id="hero-hl"></div>
+        <p class="cpane-foot">Faded gaps are spaces. This tokenizer throws them away and marks word pieces with ##.</p>
+      </div>
+      <div class="cpane cpane-ids">
+        <div class="cpane-head"><span>Token IDs</span><b class="big-count" id="hero-idcount"></b></div>
+        <div class="hero-ids" id="pl-ids"></div>
+      </div>
+    </div>
+    <p class="galaxy-note">Floating behind this text: every token's learned embedding (step 6). The glowing ones are in your sentence.</p>
+  </div>
+</header>
+
+<nav class="steps" aria-label="Sections">
+  <a href="#s-text"><b>1</b>Text</a>
+  <a href="#s-tokens"><b>2</b>Tokenization</a>
+  <a href="#s-vocab"><b>3</b>Vocabulary</a>
+  <a href="#s-ids"><b>4</b>Token IDs</a>
+  <a href="#s-freq"><b>5</b>Frequency</a>
+  <a href="#s-embed"><b>6</b>Embeddings</a>
+</nav>
+
+<main>
+
+  <!-- 1. TEXT ------------------------------------------------------------ -->
+  <section class="step" id="s-text">
+    <aside class="note">
+      <span class="num">1</span>
+      <h2>Text</h2>
+      <p>A language model never sees letters, only numbers. The <strong class="k-train">training corpus</strong> is what the tokenizer studies to decide which pieces of text get their own number.</p>
+      <p>The <strong class="k-probe">test sentence</strong> is new text it meets afterwards, using only what it learned.</p>
+    </aside>
+
+    <div class="body">
+      <div class="io-grid">
+        <div class="pane pane-train">
+          <div class="pane-head">
+            <h3>Training corpus</h3>
+            <span class="pane-sub">The tokenizer learns from this</span>
+          </div>
+          <div class="presets" id="corpus-presets" aria-label="Sample corpora"></div>
+          <textarea id="corpus" spellcheck="false" aria-label="Training corpus"></textarea>
+          <div class="pane-foot" id="corpus-meta"></div>
+        </div>
+
+        <div class="pane pane-settings">
+          <div class="pane-head"><h3>Tokenizer settings</h3></div>
+
+          <div class="seg" role="radiogroup" aria-label="Algorithm" id="algo">
+            <button type="button" role="radio" data-algo="wordpiece">Words + pieces</button>
+            <button type="button" role="radio" data-algo="bpe">BPE merges</button>
+          </div>
+          <p class="algo-help" id="algo-help"></p>
+
+          <label class="field" id="f-maxwords">
+            <span>Whole words to keep <output id="maxwords-out"></output></span>
+            <input type="range" id="maxwords" min="0" max="200" value="20">
+          </label>
+          <label class="field" id="f-merges">
+            <span>Merges to learn <output id="merges-out"></output></span>
+            <input type="range" id="merges" min="0" max="400" value="80">
+          </label>
+
+          <label class="check"><input type="checkbox" id="lowercase" checked> Lowercase everything first</label>
+          <label class="check"><input type="checkbox" id="alphabet" checked> <span>Include the a–z and 0–9 alphabet as pieces</span></label>
+          <label class="check" id="f-fallback"><input type="checkbox" id="fallback" checked> <span>Split unknown words into pieces <em>(off: the whole word becomes [UNK])</em></span></label>
+          <label class="check"><input type="checkbox" id="live" checked> Rebuild while I type</label>
+
+          <button type="button" class="btn btn-train" id="build">Build vocabulary</button>
+          <p class="build-status" id="build-status" aria-live="polite"></p>
+        </div>
+      </div>
+
+      <div class="pane pane-test">
+        <div class="pane-head">
+          <h3>Test sentence</h3>
+          <span class="pane-sub">New text, encoded with the vocabulary you just built</span>
+        </div>
+        <div class="presets" id="test-presets" aria-label="Sample test sentences"></div>
+        <div class="test-row">
+          <input type="text" id="test" spellcheck="false" aria-label="Test sentence">
+          <button type="button" class="btn btn-probe" id="tokenize">Tokenize</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2. TOKENIZATION ---------------------------------------------------- -->
+  <section class="step" id="s-tokens">
+    <aside class="note">
+      <span class="num">2</span>
+      <h2>Tokenization</h2>
+      <p>First the text is split at spaces and punctuation. Then each word is looked up. If the vocabulary knows it, it stays whole. If not, it is cut into smaller pieces the vocabulary does know.</p>
+      <p>A piece that starts with <code>##</code> continues the word before it. <span class="unk-inline">[UNK]</span> means there was no piece at all.</p>
+    </aside>
+
+    <div class="body">
+      <div class="tabs" role="tablist" id="token-tabs">
+        <button type="button" role="tab" data-view="test" aria-selected="true">Test sentence</button>
+        <button type="button" role="tab" data-view="corpus" aria-selected="false">Training corpus</button>
+      </div>
+
+      <div class="trace" id="trace">
+        <div class="trace-row">
+          <span class="trace-key">After normalising</span>
+          <div class="trace-val mono" id="trace-norm"></div>
+        </div>
+        <div class="trace-row">
+          <span class="trace-key">Split at spaces and punctuation</span>
+          <div class="trace-val" id="trace-pre"></div>
+        </div>
+        <div class="trace-row trace-main">
+          <span class="trace-key">Tokens, with their IDs</span>
+          <div class="trace-val token-view" id="token-view"></div>
+        </div>
+      </div>
+      <p class="summary" id="token-summary"></p>
+
+      <div class="chip-legend" aria-label="Legend">
+        <span><i class="lg lg-whole"></i>Solid border: whole word found in the vocabulary</span>
+        <span><i class="lg lg-piece"></i>Dashed border: piece of a split word</span>
+        <span><i class="lg lg-unk"></i>[UNK]: no piece fits</span>
+        <span><i class="lg lg-special"></i>Special token</span>
+        <span class="lg-note">Fill colour only tells tokens apart: the same token always gets the same colour.</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. VOCABULARY ------------------------------------------------------ -->
+  <section class="step" id="s-vocab">
+    <aside class="note">
+      <span class="num">3</span>
+      <h2>Vocabulary</h2>
+      <p>The vocabulary is a fixed dictionary: every token the tokenizer knows, each with its own ID. Once built, it never changes, even when new words arrive.</p>
+      <p>Four IDs are reserved. <code>[PAD]</code> fills empty slots, <code>[UNK]</code> stands in for anything unknown, <code>[BOS]</code> and <code>[EOS]</code> mark the start and end of a sequence.</p>
+    </aside>
+
+    <div class="body">
+      <div class="vstats" id="vocab-stats"></div>
+      <div class="composition" id="vocab-composition" aria-label="Vocabulary make-up"></div>
+
+      <div class="tabs" role="tablist" id="vocab-tabs">
+        <button type="button" role="tab" data-view="table" aria-selected="true">All tokens</button>
+        <button type="button" role="tab" data-view="merges" aria-selected="false">Merge rules (BPE)</button>
+      </div>
+
+      <div id="vocab-table-wrap">
+        <div class="vcontrols">
+          <input type="search" id="vsearch" placeholder="Search tokens" aria-label="Search tokens">
+          <select id="vfilter" aria-label="Filter by type">
+            <option value="all">All types</option>
+            <option value="special">Special</option>
+            <option value="word">Whole words</option>
+            <option value="subword">Merged pieces</option>
+            <option value="char">Single characters</option>
+            <option value="punct">Punctuation</option>
+            <option value="unused">Never used in training</option>
+            <option value="test">Used in test sentence</option>
+          </select>
+          <select id="vsort" aria-label="Sort by">
+            <option value="id">Sort by ID</option>
+            <option value="count-desc">Most used first</option>
+            <option value="count-asc">Least used first</option>
+            <option value="alpha">A to Z</option>
+            <option value="length">Longest token first</option>
+          </select>
+          <span class="vcount" id="vcount"></span>
+        </div>
+        <div class="table-scroll">
+          <table class="vtable">
+            <thead><tr><th scope="col">ID</th><th scope="col">Token</th><th scope="col">Count</th><th scope="col">Share</th><th scope="col">Type</th></tr></thead>
+            <tbody id="vbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div id="merges-wrap" hidden>
+        <p class="merge-help" id="merge-help"></p>
+        <div class="table-scroll">
+          <table class="vtable mtable">
+            <thead><tr><th scope="col">Step</th><th scope="col">Pair glued together</th><th scope="col">New token</th><th scope="col">ID</th><th scope="col">Pair seen</th></tr></thead>
+            <tbody id="mbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. TOKEN IDS ------------------------------------------------------- -->
+  <section class="step" id="s-ids">
+    <aside class="note">
+      <span class="num">4</span>
+      <h2>Token IDs</h2>
+      <p>This list of numbers is all the model receives. Each ID picks one row of the model's embedding table, which is where learning about meaning begins.</p>
+      <p>Decoding runs the dictionary backwards. Lowercasing and <code>[UNK]</code> throw information away, so the text you get back may not match what you typed.</p>
+    </aside>
+
+    <div class="body">
+      <div class="enc-options">
+        <label class="check"><input type="checkbox" id="add-bos" checked> Add [BOS] at the start</label>
+        <label class="check"><input type="checkbox" id="add-eos" checked> Add [EOS] at the end</label>
+        <label class="pad-field">Pad to length <input type="number" id="pad-to" min="0" max="256" value="0" aria-label="Pad to length"> <em>(0 = no padding)</em></label>
+      </div>
+
+      <div class="idbox">
+        <div class="idbox-head">
+          <span>Encoded sequence <b id="id-len"></b></span>
+          <button type="button" class="btn btn-quiet" id="copy-ids">Copy IDs</button>
+        </div>
+        <code class="id-array" id="id-array"></code>
+        <p class="pad-note" id="pad-note"></p>
+      </div>
+
+      <div class="table-scroll mapping-scroll">
+        <table class="vtable maptable">
+          <thead><tr><th scope="col">Position</th><th scope="col">From your text</th><th scope="col">Token</th><th scope="col">ID</th><th scope="col">How it was found</th></tr></thead>
+          <tbody id="map-body"></tbody>
+        </table>
+      </div>
+
+      <div class="decoder">
+        <h3>Decode IDs back to text</h3>
+        <p class="decoder-help">Edit the numbers, swap one for another ID from the vocabulary, then decode.</p>
+        <textarea id="decode-in" spellcheck="false" aria-label="IDs to decode"></textarea>
+        <div class="decoder-actions">
+          <button type="button" class="btn btn-probe" id="decode">Decode</button>
+          <button type="button" class="btn btn-quiet" id="use-encoded">Use the encoded IDs</button>
+          <label class="check"><input type="checkbox" id="skip-special" checked> Hide [PAD], [BOS], [EOS]</label>
+        </div>
+        <div class="decode-out" id="decode-out" aria-live="polite"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5. FREQUENCY ------------------------------------------------------- -->
+  <section class="step" id="s-freq">
+    <aside class="note">
+      <span class="num">5</span>
+      <h2>Frequency</h2>
+      <p>The counts come from running the finished tokenizer over the training corpus. A handful of tokens do most of the work, and most tokens are rare.</p>
+      <p>That pattern is Zipf's law, and it is why tokenizers keep common words whole and build rare words from pieces.</p>
+    </aside>
+
+    <div class="body">
+      <div class="chart-controls">
+        <div class="seg seg-small" role="radiogroup" aria-label="Chart view" id="chart-view">
+          <button type="button" role="radio" data-view="compare">Most vs least used</button>
+          <button type="button" role="radio" data-view="rank">Rank curve</button>
+        </div>
+        <label class="field field-inline" id="f-topn">
+          <span>Show <output id="topn-out"></output> each</span>
+          <input type="range" id="topn" min="3" max="25" value="10">
+        </label>
+        <label class="check"><input type="checkbox" id="chart-punct" checked> Include punctuation</label>
+        <label class="check"><input type="checkbox" id="chart-unused"> Include unused tokens</label>
+      </div>
+      <div class="chart-legend" aria-label="Chart legend">
+        <span><i class="sw sw-word"></i>Whole word</span>
+        <span><i class="sw sw-piece"></i>Piece (subword or character)</span>
+        <span><i class="sw sw-punct"></i>Punctuation</span>
+        <span class="lg-test">Bold labels appear in your test sentence</span>
+      </div>
+      <div class="chart" id="chart"><div class="chart-plot"></div></div>
+
+      <p class="insight" id="insight"></p>
+    </div>
+  </section>
+
+  <!-- 6. EMBEDDINGS ------------------------------------------------------ -->
+  <section class="step" id="s-embed">
+    <aside class="note">
+      <span class="num">6</span>
+      <h2>Embeddings</h2>
+      <p>Inside a model, each token ID picks out a list of numbers called its embedding. Tokens used in similar places get similar numbers, so they end up close together.</p>
+      <p>These are real embeddings, trained live on your corpus with word2vec (skip-gram). Each token gets 16 numbers, and PCA squashes them down to the 3 directions you see.</p>
+    </aside>
+
+    <div class="body">
+      <div class="chart chart3d" id="embed3d">
+        <div class="c3-bar">
+          <button type="button" class="btn btn-probe btn-small" id="emb-train">Retrain</button>
+          <button type="button" class="btn btn-quiet" id="emb-pause">Pause</button>
+          <div class="emb-progress" aria-live="polite">
+            <div class="emb-bar"><i id="emb-fill"></i></div>
+            <span id="emb-status"></span>
+          </div>
+          <div class="c3-btns">
+            <button type="button" class="btn btn-quiet" id="c3-zoom-in" aria-label="Zoom in">+</button>
+            <button type="button" class="btn btn-quiet" id="c3-zoom-out" aria-label="Zoom out">−</button>
+            <button type="button" class="btn btn-quiet" id="c3-reset">Reset view</button>
+          </div>
+        </div>
+        <div class="c3-bar c3-bar-2">
+          <label class="check"><input type="checkbox" id="emb-path" checked> Draw my sentence as a path</label>
+          <label class="check"><input type="checkbox" id="emb-punct" checked> Include punctuation</label>
+          <label class="check"><input type="checkbox" id="c3-auto"> Auto-rotate</label>
+          <span class="c3-hint">Drag to rotate. Hover a token to see its nearest neighbours. Click, then scroll to zoom.</span>
+        </div>
+        <canvas tabindex="0" aria-label="3D map of token embeddings. The table below lists each test token's nearest neighbours."></canvas>
+        <div class="chart-legend emb-legend">
+          <span><i class="sw sw-word"></i>Whole word</span>
+          <span><i class="sw sw-piece"></i>Piece (subword or character)</span>
+          <span><i class="sw sw-punct"></i>Punctuation</span>
+          <span class="lg-test">Pink ring and dashed path: your test sentence</span>
+        </div>
+      </div>
+
+      <h3 class="emb-h">Closest tokens to each token in your sentence</h3>
+      <p class="emb-sub">Similarity runs from −1 to 1: 1 means the two embeddings point the same way. A token that never appeared in training was never trained, so its embedding is still random noise.</p>
+      <div class="table-scroll">
+        <table class="vtable">
+          <thead><tr><th scope="col">Token</th><th scope="col">ID</th><th scope="col">Nearest neighbours (similarity)</th></tr></thead>
+          <tbody id="emb-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="foot">
+  <h2>How this compares with real LLM tokenizers</h2>
+  <p>GPT-style tokenizers use byte-level BPE: their base alphabet is all 256 bytes, so nothing is ever <code>[UNK]</code>, and spaces are kept inside tokens instead of being thrown away. Their vocabularies hold 50,000 to 200,000 tokens learned from billions of words. The steps are the same as here: split the text, build pieces, look up IDs.</p>
+</footer>
+
+<div class="tip" id="tip" role="tooltip" hidden></div>
+
+<script src="js/tokenizer.js"></script>
+<script src="js/presets.js"></script>
+<script src="js/chart.js"></script>
+<script src="js/chart3d.js"></script>
+<script src="js/embedding.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
